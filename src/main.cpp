@@ -120,7 +120,7 @@ void contar_tiempo() {
       flag_actualizar = true;
       if (tiempo_restante == 0) {
         estado = 0;
-        digitalWrite(LED_SALIDA, LOW);
+        digitalWrite(LED_SALIDA, HIGH);
         reset_flag = true;
       }
     }
