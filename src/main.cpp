@@ -16,9 +16,10 @@
 
 // ================== CONFIGURACIÓN ==================
 #define BOTON_INC   D5
-#define BOTON_DEC   D4
-#define BOTON_EMERG D6
-#define LED_SALIDA  D7
+#define BOTON_DEC   D1
+#define BOTON_EMERG D4
+#define RELAY1  D7
+#define RELAY2  D6
 
 #define TIEMPO_MIN  600   // 10 min en segundos
 #define TIEMPO_MAX  5400  // 90 min en segundos
@@ -27,8 +28,11 @@
 // ================== VARIABLES ==================
 volatile uint32_t tiempo_restante = TIEMPO_MIN; 
 volatile uint8_t estado = 0;   // 0 detenido, 1 en marcha, 2 pausado
-volatile bool reset_flag = false;
 volatile bool flag_actualizar = true;
+
+// Control de secuencia relés
+unsigned long ultima_accion = 0;
+uint8_t fase_rele = 0;  // 0=R1 ON, 1=OFF, 2=R2 ON, 3=OFF
 
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2); // Dirección 0x27, puede variar a 0x3F
@@ -58,7 +62,6 @@ void actualizar_display() {
     lcd.print("   DETENIDO     ");
   }
 }
-
 
 void enviar_estado_uart() {
   const char *estado_str = (estado == 0) ? "DETENIDO" : 
@@ -95,14 +98,17 @@ static unsigned long ultima_lectura = 0;
     ultima_lectura = ahora;
     if (emerg_lectura == LOW) { // flanco de bajada
       if (estado == 1) {        // En marcha → pausa
-        digitalWrite(LED_SALIDA, HIGH);
+        digitalWrite(RELAY1, HIGH);
+        digitalWrite(RELAY2, HIGH);
         estado = 2;
       } else if (estado == 2) { // Pausado → reanuda
-        digitalWrite(LED_SALIDA, LOW);
-        estado = 1;
+          estado = 1;  
+          fase_rele = 0;
+          ultima_accion = millis();
       } else {                  // Detenido → inicia
-        digitalWrite(LED_SALIDA, LOW);
         estado = 1;
+        fase_rele = 0;
+        ultima_accion = millis();
       }
       flag_actualizar = true;
     }
@@ -119,10 +125,54 @@ void contar_tiempo() {
       flag_actualizar = true;
       if (tiempo_restante == 0) {
         estado = 0;
-        digitalWrite(LED_SALIDA, LOW);
-        reset_flag = true;
+        digitalWrite(RELAY1, LOW);
+        digitalWrite(RELAY2, LOW);
       }
     }
+  }
+}
+
+// Control de relés en secuencia
+void controlar_reles() {
+  if (estado != 1) return;
+
+  unsigned long ahora = millis();
+  switch (fase_rele) {
+    case 0: // RELAY1 ON
+      digitalWrite(RELAY1, HIGH);
+      digitalWrite(RELAY2, LOW);
+      if (ahora - ultima_accion >= 5000) { // 5s
+        fase_rele = 1;
+        ultima_accion = ahora;
+      }
+      break;
+
+    case 1: // OFF 2s
+      digitalWrite(RELAY1, HIGH);
+      digitalWrite(RELAY2, HIGH);
+      if (ahora - ultima_accion >= 2000) {
+        fase_rele = 2;
+        ultima_accion = ahora;
+      }
+      break;
+
+    case 2: // RELAY2 ON
+      digitalWrite(RELAY1, LOW);
+      digitalWrite(RELAY2, HIGH);
+      if (ahora - ultima_accion >= 5000) {
+        fase_rele = 3;
+        ultima_accion = ahora;
+      }
+      break;
+
+    case 3: // OFF 2s
+      digitalWrite(RELAY1, HIGH);
+      digitalWrite(RELAY2, HIGH);
+      if (ahora - ultima_accion >= 2000) {
+        fase_rele = 0;
+        ultima_accion = ahora;
+      }
+      break;
   }
 }
 
@@ -131,8 +181,11 @@ void setup() {
   pinMode(BOTON_INC, INPUT_PULLUP);
   pinMode(BOTON_DEC, INPUT_PULLUP);
   pinMode(BOTON_EMERG, INPUT_PULLUP);
-  pinMode(LED_SALIDA, OUTPUT);
-  digitalWrite(LED_SALIDA, HIGH);
+
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+  digitalWrite(RELAY1, HIGH);
+  digitalWrite(RELAY2, HIGH);
 
   Serial.begin(115200);
 
@@ -140,7 +193,6 @@ void setup() {
   lcd.backlight();
   lcd.print("Bienvenido!");
   delay(2000);
-  digitalWrite(LED_SALIDA, HIGH);
   actualizar_display();
 }
 
@@ -148,6 +200,7 @@ void setup() {
 void loop() {
   manejar_botones();
   contar_tiempo();
+  controlar_reles();
 
   if (flag_actualizar) {
     actualizar_display();
