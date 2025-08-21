@@ -16,9 +16,10 @@
 
 // ================== CONFIGURACIÓN ==================
 #define BOTON_INC   D5
-#define BOTON_DEC   D4
-#define BOTON_EMERG D6
+#define BOTON_DEC   D1
+#define BOTON_EMERG D4
 #define LED_SALIDA  D7
+
 
 #define TIEMPO_MIN  600   // 10 min en segundos
 #define TIEMPO_MAX  5400  // 90 min en segundos
