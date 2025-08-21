@@ -125,8 +125,8 @@ void contar_tiempo() {
       flag_actualizar = true;
       if (tiempo_restante == 0) {
         estado = 0;
-        digitalWrite(RELAY1, LOW);
-        digitalWrite(RELAY2, LOW);
+        digitalWrite(RELAY1, HIGH);
+        digitalWrite(RELAY2, HIGH);
       }
     }
   }
