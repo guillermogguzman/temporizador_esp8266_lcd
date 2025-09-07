@@ -2,34 +2,41 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-#define D0 16
-#define D1 5
-#define D2 4
-#define D3 0
-#define D4 2
-#define D5 14
-#define D6 12
-#define D7 13
-#define D8 15
-#define D9 3
-#define D10 1
+// ================== CONFIGURACIÓN DE PINES POR PLATAFORMA ==================
+#if defined(ESP8266)
+  // NodeMCU (ESP8266)
+  #define BOTON_INC   14    // D5
+  #define BOTON_START 2     // D4  
+  #define ACTIVAR_MOTOR  13 // D7
+  #define ESTADO_MOTOR   5  // D1
+  #define DESACTIVAR_MOTOR 12 // D6
 
-// ================== CONFIGURACIÓN ==================
-#define BOTON_INC   D5
-#define BOTON_DEC   D1
-#define BOTON_EMERG D4
-#define LED_SALIDA  D7
+#elif defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO)
+  // Arduino UNO/Nano
+  #define BOTON_INC   5
+  #define BOTON_START 4
+  #define ACTIVAR_MOTOR  7
+  #define ESTADO_MOTOR   2
+  #define DESACTIVAR_MOTOR 8
+
+#else
+  #error "Plataforma no compatible. Usa ESP8266 o Arduino UNO/Nano"
+#endif
 
 
-#define TIEMPO_MIN  600   // 10 min en segundos
+#define TIEMPO_MIN  300   // 5 min en segundos
 #define TIEMPO_MAX  5400  // 90 min en segundos
 #define TIEMPO_INC  300   // 5 min en segundos
 
 // ================== VARIABLES ==================
 volatile uint32_t tiempo_restante = TIEMPO_MIN; 
 volatile uint8_t estado = 0;   // 0 detenido, 1 en marcha, 2 pausado
-volatile bool reset_flag = false;
+volatile bool reset_flag = false; // Lectura del estado del motor
 volatile bool flag_actualizar = true;
+
+// Variables para el debounce
+int estadoActual;              // Estado actual después del debounce
+int estadoAnterior;           // Estado anterior para comparación
 
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2); // Dirección 0x27, puede variar a 0x3F
@@ -60,18 +67,10 @@ void actualizar_display() {
   }
 }
 
-
-void enviar_estado_uart() {
-  const char *estado_str = (estado == 0) ? "DETENIDO" : 
-                           (estado == 1) ? "EN MARCHA" : "PAUSADO";
-  Serial.printf("Estado: %s | Tiempo: %02d:%02d\r\n",
-                estado_str, tiempo_restante / 60, tiempo_restante % 60);
-}
-
 void manejar_botones() {
 static unsigned long ultima_lectura = 0;
   static bool inc_estado_anterior = HIGH;
-  static bool emerg_estado_anterior = HIGH;
+  static bool start_estado_anterior = HIGH;
 
   unsigned long ahora = millis();
 
@@ -90,25 +89,32 @@ static unsigned long ultima_lectura = 0;
   }
   inc_estado_anterior = inc_lectura;
 
-  // === Botón EMERG ===
-  bool emerg_lectura = digitalRead(BOTON_EMERG);
-  if (emerg_lectura != emerg_estado_anterior && (ahora - ultima_lectura) > 80) {
+  // === Botón START ===
+  bool start_lectura = digitalRead(BOTON_START);
+  if (start_lectura != start_estado_anterior && (ahora - ultima_lectura) > 80) {
     ultima_lectura = ahora;
-    if (emerg_lectura == LOW) { // flanco de bajada
+    if (start_lectura == LOW) { // flanco de bajada
       if (estado == 1) {        // En marcha → pausa
-        digitalWrite(LED_SALIDA, HIGH);
-        estado = 2;
+        //digitalWrite(DESACTIVAR_MOTOR, LOW);
+        //delay(500);
+        //digitalWrite(DESACTIVAR_MOTOR, HIGH);
+        
+        //estado = 2;
       } else if (estado == 2) { // Pausado → reanuda
-        digitalWrite(LED_SALIDA, LOW);
+        //digitalWrite(ACTIVAR_MOTOR, LOW);
+        //delay(500);
+        //digitalWrite(ACTIVAR_MOTOR, HIGH);
         estado = 1;
       } else {                  // Detenido → inicia
-        digitalWrite(LED_SALIDA, LOW);
+        digitalWrite(ACTIVAR_MOTOR, LOW);
+        delay(500);
+        digitalWrite(ACTIVAR_MOTOR, HIGH);
         estado = 1;
       }
       flag_actualizar = true;
     }
   }
-  emerg_estado_anterior = emerg_lectura;
+  start_estado_anterior = start_lectura;
 }
 
 void contar_tiempo() {
@@ -118,22 +124,44 @@ void contar_tiempo() {
     if (estado == 1 && tiempo_restante > 0) {
       tiempo_restante--;
       flag_actualizar = true;
+      reset_flag = true;
       if (tiempo_restante == 0) {
         estado = 0;
-        digitalWrite(LED_SALIDA, HIGH);
-        reset_flag = true;
+        digitalWrite(DESACTIVAR_MOTOR, LOW);
+        delay(500);
+        digitalWrite(DESACTIVAR_MOTOR, HIGH);
+        tiempo_restante = TIEMPO_MIN;
       }
     }
+  }
+}
+
+void leer_estado_motor(){
+  // Leer el pin con debounce
+  int lectura = digitalRead(ESTADO_MOTOR);
+  if (lectura != estadoActual) {
+    estadoActual = lectura;
+  }
+  if (estadoActual == LOW and estado != 0) {
+    estado = 0;
+    digitalWrite(DESACTIVAR_MOTOR, LOW);
+    delay(500);
+    digitalWrite(DESACTIVAR_MOTOR, HIGH);
+    tiempo_restante = TIEMPO_MIN;
+    flag_actualizar = true;
   }
 }
 
 // ================== SETUP ==================
 void setup() {
   pinMode(BOTON_INC, INPUT_PULLUP);
-  pinMode(BOTON_DEC, INPUT_PULLUP);
-  pinMode(BOTON_EMERG, INPUT_PULLUP);
-  pinMode(LED_SALIDA, OUTPUT);
-  digitalWrite(LED_SALIDA, HIGH);
+  pinMode(BOTON_START, INPUT_PULLUP);
+  pinMode(ACTIVAR_MOTOR, OUTPUT);
+  pinMode(ESTADO_MOTOR, INPUT_PULLUP);
+  pinMode(DESACTIVAR_MOTOR, OUTPUT);
+
+  digitalWrite(ACTIVAR_MOTOR, HIGH);
+  digitalWrite(DESACTIVAR_MOTOR, HIGH);
 
   Serial.begin(115200);
 
@@ -141,7 +169,11 @@ void setup() {
   lcd.backlight();
   lcd.print("Bienvenido!");
   delay(2000);
-  digitalWrite(LED_SALIDA, HIGH);
+  
+  // Leer estado inicial motor
+  estadoActual = digitalRead(ESTADO_MOTOR);
+  estadoAnterior = estadoActual;
+
   actualizar_display();
 }
 
@@ -149,7 +181,10 @@ void setup() {
 void loop() {
   manejar_botones();
   contar_tiempo();
-
+  if (reset_flag == true) {
+    leer_estado_motor();
+    reset_flag = false;
+  }
   if (flag_actualizar) {
     actualizar_display();
     flag_actualizar = false;
